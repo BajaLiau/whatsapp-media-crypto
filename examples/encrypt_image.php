@@ -9,7 +9,7 @@ use WhatsAppMedia\Stream\EncryptingStream;
 // Paths to the original image and key
 $originalImagePath = __DIR__ . '/../samples/IMAGE.original';
 $keyPath = __DIR__ . '/../samples/IMAGE.key';
-$outputEncryptedPath = __DIR__ . '/../samples/IMAGE.mine.encrypted';
+$outputEncryptedPath = __DIR__ . '/../samples/IMAGE.encrypted';
 
 // Read the media key
 $mediaKey = file_get_contents($keyPath);
@@ -36,7 +36,6 @@ fclose($outputFile);
 
 // Log final HMAC and sidecar data for debugging
 file_put_contents($logFile, "Final HMAC: Placeholder for debugging\n", FILE_APPEND);
-file_put_contents($logFile, "Sidecar Data: " . bin2hex($encStream->getSidecar()) . "\n", FILE_APPEND);
 
 // Output success message
 echo "Encrypted image saved to: $outputEncryptedPath\n";

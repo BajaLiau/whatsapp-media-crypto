@@ -1,65 +1,29 @@
 <?php
+require __DIR__ . '/../vendor/autoload.php';
 
-require_once __DIR__ . '/../vendor/autoload.php';
-require_once __DIR__ . '/../src/MediaKey.php';
-require_once __DIR__ . '/../src/Stream/DecryptingStream.php';
-<?php
-use WhatsApp\MediaKey;
-use WhatsApp\Stream\DecryptingStream;
+use GuzzleHttp\Psr7\Utils;
+use WhatsAppMedia\MediaKey;
+use WhatsAppMedia\Stream\DecryptingStream;
 
-function decryptImage($inputPath, $outputPath, $keyPath) {
-    $key = file_get_contents($keyPath);
-    $mediaKey = new MediaKey($key);
-
-    $inputStream = fopen($inputPath, 'rb');
-    $outputStream = fopen($outputPath, 'wb');
-
-    $decryptingStream = new DecryptingStream($inputStream, $mediaKey);
-
-    while (!feof($decryptingStream)) {
-        fwrite($outputStream, fread($decryptingStream, 8192));
-    }
-
-    fclose($decryptingStream);
-    fclose($outputStream);
-
-    echo "Image decrypted successfully: $outputPath\n";
-}
-
-$inputImage = __DIR__ . '/../samples/IMAGE.encrypted';
-$outputImage = __DIR__ . '/../samples/IMAGE.original.decrypted';
+// Load the encrypted file and key
+$encryptedFile = __DIR__ . '/../samples/IMAGE.encrypted';
 $keyFile = __DIR__ . '/../samples/IMAGE.key';
+$outputFile = __DIR__ . '/../samples/IMAGE.generated.mine';
 
-decryptImage($inputImage, $outputImage, $keyFile);
+$mediaKey = file_get_contents($keyFile);
+$parts = MediaKey::expand($mediaKey, 'IMAGE');
 
-require_once __DIR__ . '/../vendor/autoload.php';
-require_once __DIR__ . '/../src/MediaKey.php';
-require_once __DIR__ . '/../src/Stream/EncryptingStream.php';
+// Open the encrypted file for reading
+$encStream = Utils::streamFor(fopen($encryptedFile, 'rb'));
 
-use WhatsApp\MediaKey;
-use WhatsApp\Stream\EncryptingStream;
+// Create a decrypting stream
+$decStream = new DecryptingStream($encStream, $parts['cipherKey'], $parts['macKey'], $parts['iv']);
 
-function encryptImage($inputPath, $outputPath, $keyPath) {
-    $key = file_get_contents($keyPath);
-    $mediaKey = new MediaKey($key);
-
-    $inputStream = fopen($inputPath, 'rb');
-    $outputStream = fopen($outputPath, 'wb');
-
-    $encryptingStream = new EncryptingStream($inputStream, $mediaKey);
-
-    while (!feof($encryptingStream)) {
-        fwrite($outputStream, fread($encryptingStream, 8192));
-    }
-
-    fclose($encryptingStream);
-    fclose($outputStream);
-
-    echo "Image encrypted successfully: $outputPath\n";
+// Write the decrypted content to the output file
+$out = fopen($outputFile, 'wb');
+while (!$decStream->eof()) {
+    fwrite($out, $decStream->read(8192));
 }
+fclose($out);
 
-$inputImage = __DIR__ . '/../samples/IMAGE.original';
-$outputImage = __DIR__ . '/../samples/IMAGE.encrypted';
-$keyFile = __DIR__ . '/../samples/IMAGE.key';
-
-encryptImage($inputImage, $outputImage, $keyFile);
+echo "Decryption complete. Output written to IMAGE.generated.mine\n";
