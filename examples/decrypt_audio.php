@@ -8,7 +8,7 @@ use WhatsAppMedia\Stream\DecryptingStream;
 
 // Paths to the encrypted audio and key
 $encryptedAudioPath = __DIR__ . '/../samples/AUDIO.encrypted';
-$keyPath = __DIR__ . '/../samples/AUDIO.key';
+$keyPath = __DIR__ . '/../samples/original/AUDIO.key';
 $outputDecryptedPath = __DIR__ . '/../samples/AUDIO.generated.mine';
 
 // Read the media key

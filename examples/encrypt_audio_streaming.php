@@ -8,8 +8,8 @@ use WhatsAppMedia\Stream\EncryptingStream;
 use WhatsAppMedia\Stream\SidecarGenerator;
 
 // Paths to the original audio and key
-$originalAudioPath = __DIR__ . '/../samples/AUDIO.original';
-$keyPath = __DIR__ . '/../samples/AUDIO.key';
+$originalAudioPath = __DIR__ . '/../samples/original/AUDIO.original';
+$keyPath = __DIR__ . '/../samples/original/AUDIO.key';
 $outputEncryptedPath = __DIR__ . '/../samples/AUDIO.encrypted';
 $sidecarPath = __DIR__ . '/../samples/AUDIO.sidecar.mine';
 

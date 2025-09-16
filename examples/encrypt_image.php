@@ -7,19 +7,13 @@ use WhatsAppMedia\MediaKey;
 use WhatsAppMedia\Stream\EncryptingStream;
 
 // Paths to the original image and key
-$originalImagePath = __DIR__ . '/../samples/IMAGE.original';
-$keyPath = __DIR__ . '/../samples/IMAGE.key';
+$originalImagePath = __DIR__ . '/../samples/original/IMAGE.original';
+$keyPath = __DIR__ . '/../samples/original/IMAGE.key';
 $outputEncryptedPath = __DIR__ . '/../samples/IMAGE.encrypted';
 
 // Read the media key
 $mediaKey = file_get_contents($keyPath);
 $parts = MediaKey::expand($mediaKey, 'IMAGE');
-
-// Log inputs to HKDF::derive for debugging
-$logFile = __DIR__ . '/../samples/encrypt_debug.log';
-file_put_contents($logFile, "HKDF Input Key Material: " . bin2hex($mediaKey) . "\n", FILE_APPEND);
-file_put_contents($logFile, "HKDF Info: WhatsApp Image Keys\n", FILE_APPEND);
-file_put_contents($logFile, "HKDF Salt: " . bin2hex(str_repeat("\0", 32)) . "\n", FILE_APPEND);
 
 // Open the original image file
 $source = Utils::streamFor(fopen($originalImagePath, 'rb'));

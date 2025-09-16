@@ -21,10 +21,6 @@ class DecryptingStream implements StreamInterface
     public function __construct(StreamInterface $source, string $cipherKey, string $macKey, string $iv)
     {
         $this->stream = $source;
-
-        // debug log (truncate)
-        @file_put_contents(__DIR__ . '/filtered_decrypt_debug.log', '');
-
         $this->cipherKey = $cipherKey;
         $this->macKey = $macKey;
         $this->iv = $iv;
@@ -91,12 +87,6 @@ class DecryptingStream implements StreamInterface
             $chunk = substr($ciphertext, 0, $chunkLen);
             $ciphertext = substr($ciphertext, $chunkLen);
 
-            // Debug IV and chunk size
-            @file_put_contents(__DIR__ . '/filtered_decrypt_debug.log',
-                "[DECRYPT] Decrypting chunk size: " . strlen($chunk) . "\n" .
-                "[DECRYPT] Current IV: " . bin2hex($this->iv) . "\n",
-                FILE_APPEND);
-
             $decryptedChunk = openssl_decrypt(
                 $chunk,
                 'aes-256-cbc',
@@ -136,11 +126,6 @@ class DecryptingStream implements StreamInterface
 
         $pad = ord($data[$len - 1]);
         if ($pad < 1 || $pad > 16) {
-            // Log debug information for invalid padding value
-            @file_put_contents(__DIR__ . '/filtered_decrypt_debug.log',
-                "[ERROR] Invalid padding value: $pad\n" .
-                "[ERROR] Data (hex): " . bin2hex($data) . "\n",
-                FILE_APPEND);
 
             // Return the data as-is for debugging purposes
             return $data;
@@ -158,12 +143,6 @@ class DecryptingStream implements StreamInterface
 
         for ($i = 0; $i < $pad; $i++) {
             if (ord($paddingBytes[$i]) !== $pad) {
-                // Log debug information for mismatched padding bytes
-                @file_put_contents(__DIR__ . '/filtered_decrypt_debug.log',
-                    "[ERROR] Mismatched padding byte at position $i: " . ord($paddingBytes[$i]) . "\n" .
-                    "[ERROR] Expected padding value: $pad\n",
-                    FILE_APPEND);
-
                 throw new \RuntimeException('Invalid PKCS#7 padding');
             }
         }

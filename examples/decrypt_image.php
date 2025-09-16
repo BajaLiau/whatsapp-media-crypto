@@ -7,7 +7,7 @@ use WhatsAppMedia\Stream\DecryptingStream;
 
 // Load the encrypted file and key
 $encryptedFile = __DIR__ . '/../samples/IMAGE.encrypted';
-$keyFile = __DIR__ . '/../samples/IMAGE.key';
+$keyFile = __DIR__ . '/../samples/original/IMAGE.key';
 $outputFile = __DIR__ . '/../samples/IMAGE.generated.mine';
 
 $mediaKey = file_get_contents($keyFile);

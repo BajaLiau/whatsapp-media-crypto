@@ -6,8 +6,8 @@ use WhatsAppMedia\MediaKey;
 use WhatsAppMedia\Stream\EncryptingStreamWithSidecar;
 
 // Пути к оригинальному видео и mediaKey
-$originalVideoPath = __DIR__ . '/../samples/VIDEO.original';
-$keyPath = __DIR__ . '/../samples/VIDEO.key';
+$originalVideoPath = __DIR__ . '/../samples/original/VIDEO.original';
+$keyPath = __DIR__ . '/../samples/original/VIDEO.key';
 $outputEncryptedPath = __DIR__ . '/../samples/VIDEO.encrypted';
 $sidecarPath = __DIR__ . '/../samples/VIDEO.sidecar.mine';
 
