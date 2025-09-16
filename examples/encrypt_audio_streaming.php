@@ -4,46 +4,75 @@ require __DIR__ . '/../vendor/autoload.php';
 use GuzzleHttp\Psr7\Utils;
 use WhatsAppMedia\StreamFactory;
 
-// Paths to the files
+// Пути к файлам
 $originalAudioPath = __DIR__ . '/../samples/original/AUDIO.original';
 $keyPath = __DIR__ . '/../samples/original/AUDIO.key';
 $outputEncryptedPath = __DIR__ . '/../samples/AUDIO.encrypted';
 $outputSidecarPath = __DIR__ . '/../samples/AUDIO.sidecar';
 
 try {
-    // Read the key and create the source stream
+    // Проверяем существование исходных файлов
+    if (!file_exists($originalAudioPath)) {
+        throw new \RuntimeException("Исходный файл не найден: $originalAudioPath");
+    }
+    if (!file_exists($keyPath)) {
+        throw new \RuntimeException("Файл ключа не найден: $keyPath");
+    }
+
+    // Читаем ключ
     $mediaKey = file_get_contents($keyPath);
+
+    // Открываем исходный файл
     $source = Utils::streamFor(fopen($originalAudioPath, 'rb'));
 
-    // Create the encrypting stream with sidecar generation
+    // Создаем директорию для выходных файлов, если её нет
+    $outputDir = dirname($outputEncryptedPath);
+    if (!is_dir($outputDir)) {
+        mkdir($outputDir, 0777, true);
+    }
+
+    // Создаём шифрующий поток с генерацией сайдкара
     $encStream = StreamFactory::createEncryptingStream(
         $source,
         $mediaKey,
         'AUDIO',
-        true // enable sidecar generation
+        true // включаем генерацию сайдкара
     );
 
-    // Write the encrypted data
+    // Записываем зашифрованные данные
     $outputFile = fopen($outputEncryptedPath, 'wb');
-    while (!$encStream->eof()) {
-        $data = $encStream->read(8192);
-        if ($data === '') {
-            break;
+    try {
+        while (!$encStream->eof()) {
+            $data = $encStream->read(8192);
+            if ($data === '') {
+                break;
+            }
+            fwrite($outputFile, $data);
         }
-        fwrite($outputFile, $data);
+    } finally {
+        fclose($outputFile);
     }
-    fclose($outputFile);
 
-    // Save the sidecar
+    // После полного шифрования сохраняем сайдкар
     file_put_contents($outputSidecarPath, $encStream->getSidecar());
 
-    echo "Audio successfully encrypted: $outputEncryptedPath\n";
-    echo "Sidecar saved: $outputSidecarPath\n";
+    echo "Аудио успешно зашифровано: $outputEncryptedPath\n";
+    echo "Сайдкар сохранен: $outputSidecarPath\n";
+
+    // Проверяем размеры файлов
+    $originalSize = filesize($originalAudioPath);
+    $encryptedSize = filesize($outputEncryptedPath);
+    $sidecarSize = filesize($outputSidecarPath);
+
+    echo "\nИнформация о файлах:\n";
+    echo "Размер исходного файла: " . number_format($originalSize) . " байт\n";
+    echo "Размер зашифрованного файла: " . number_format($encryptedSize) . " байт\n";
+    echo "Размер сайдкара: " . number_format($sidecarSize) . " байт\n";
 
 } catch (\InvalidArgumentException $e) {
-    echo "Validation error: " . $e->getMessage() . "\n";
+    echo "Ошибка валидации: " . $e->getMessage() . "\n";
     exit(1);
 } catch (\RuntimeException $e) {
-    echo "Encryption error: " . $e->getMessage() . "\n";
+    echo "Ошибка шифрования: " . $e->getMessage() . "\n";
     exit(1);
 }

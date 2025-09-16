@@ -23,110 +23,133 @@ composer require your-vendor/whatsapp-media-crypto
 - Строгая типизация и полная документация
 - 100% покрытие тестами
 
-## Использование
+## Структура проекта
 
-### Базовое шифрование
+```
+src/
+├── Stream/
+│   ├── AbstractCryptoStream.php    # Базовый класс для криптографических потоков
+│   ├── EncryptingStream.php        # Реализация шифрования
+│   └── DecryptingStream.php        # Реализация дешифрования
+├── HKDF.php                        # Реализация HKDF
+├── MediaKey.php                    # Работа с медиа-ключами
+└── StreamFactory.php               # Фабрика для создания потоков
+```
+
+## Примеры использования
+
+### Шифрование изображений
 
 ```php
 use WhatsAppMedia\StreamFactory;
 use GuzzleHttp\Psr7\Utils;
 
 $source = Utils::streamFor(fopen('image.jpg', 'rb'));
-$mediaKey = random_bytes(32);
+$mediaKey = file_get_contents('image.key');
 
 $encryptedStream = StreamFactory::createEncryptingStream(
-    $source, 
-    $mediaKey, 
-    'IMAGE'
-);
-```
-
-### Шифрование с генерацией сайдкара (для видео и аудио)
-
-```php
-$source = Utils::streamFor(fopen('video.mp4', 'rb'));
-$mediaKey = random_bytes(32);
-
-$encryptedStream = StreamFactory::createEncryptingStream(
-    $source, 
-    $mediaKey, 
-    'VIDEO',
-    true // включаем генерацию сайдкара
-);
-
-// После шифрования можно получить сайдкар
-$sidecar = $encryptedStream->getSidecar();
-```
-
-### Дешифрование
-
-```php
-$encrypted = Utils::streamFor(fopen('image.encrypted', 'rb'));
-$decryptedStream = StreamFactory::createDecryptingStream(
-    $encrypted,
+    $source,
     $mediaKey,
     'IMAGE'
 );
 ```
 
+### Шифрование видео/аудио с генерацией сайдкара
+
+```php
+$source = Utils::streamFor(fopen('video.mp4', 'rb'));
+$mediaKey = file_get_contents('video.key');
+
+$encryptedStream = StreamFactory::createEncryptingStream(
+    $source,
+    $mediaKey,
+    'VIDEO',
+    true // включаем генерацию сайдкара
+);
+
+// После шифрования получаем сайдкар
+$sidecar = $encryptedStream->getSidecar();
+```
+
+### Дешифрование файлов
+
+```php
+$encrypted = Utils::streamFor(fopen('encrypted_file', 'rb'));
+$mediaKey = file_get_contents('file.key');
+
+$decryptedStream = StreamFactory::createDecryptingStream(
+    $encrypted,
+    $mediaKey,
+    'VIDEO' // или 'AUDIO', 'IMAGE', 'DOCUMENT'
+);
+```
+
 ## Поддерживаемые типы медиа
 
-| Тип      | Описание                  | Информационная строка       | Поддержка сайдкара |
-|----------|---------------------------|----------------------------|-------------------|
-| IMAGE    | Изображения              | WhatsApp Image Keys        | Нет              |
-| VIDEO    | Видео                    | WhatsApp Video Keys        | Да               |
-| AUDIO    | Аудио                    | WhatsApp Audio Keys        | Да               |
-| DOCUMENT | Документы                | WhatsApp Document Keys     | Нет              |
+| Тип      | Описание     | Информационная строка    | Поддержка сайдкара |
+|----------|--------------|-------------------------|-------------------|
+| IMAGE    | Изображения  | WhatsApp Image Keys    | Нет              |
+| VIDEO    | Видео       | WhatsApp Video Keys    | Да               |
+| AUDIO    | Аудио       | WhatsApp Audio Keys    | Да               |
+| DOCUMENT | Документы    | WhatsApp Document Keys | Нет              |
 
-## Архитектура
+## Готовые примеры
 
-Библиотека построена с учетом принципов SOLID, DRY и KISS:
+В директории `examples/` доступны готовые скрипты:
 
-### Основные компоненты
+### Шифрование
+- `encrypt_image.php` - шифрование изображений
+- `encrypt_video_streaming.php` - шифрование видео с генерацией сайдкара
+- `encrypt_audio_streaming.php` - шифрование аудио с генерацией сайдкара
+- `encrypt_audio.php` - базовое шифрование аудио
+- `encrypt_video.php` - базовое шифрование видео
 
-- `StreamFactory` - фабрика для создания криптографических потоков
-- `AbstractCryptoStream` - базовый класс для криптографических потоков
-- `EncryptingStream` - реализация шифрования с опциональной поддержкой сайдкара
-- `DecryptingStream` - реализация дешифрования
+### Дешифрование
+- `decrypt_video.php` - дешифрование видео
+- `decrypt_audio.php` - дешифрование аудио
+- `decrypt_image.php` - дешифрование изображений
 
-### Принципы проектирования
-
-- **Single Responsibility**: каждый класс имеет единую ответственность
-- **Open/Closed**: расширение функциональности без изменения существующего кода
-- **DRY**: общая логика вынесена в базовый класс
-- **KISS**: простая и понятная структура без избыточных абстракций
+Все примеры включают:
+- Проверки существования файлов
+- Создание выходных директорий
+- Обработку ошибок
+- Информацию о размерах файлов
 
 ## Особенности реализации
 
-### Генерация сайдкара
+### Шифрование
+
+1. Генерация или использование существующего mediaKey (32 байта)
+2. Расширение ключа через HKDF с SHA-256 и специфичной для типа медиа информацией
+3. Разделение на компоненты:
+   - iv: первые 16 байт
+   - cipherKey: следующие 32 байта
+   - macKey: следующие 32 байта
+   - refKey: оставшиеся 32 байта (не используются)
+4. Шифрование AES-CBC с использованием cipherKey и iv
+5. Генерация HMAC с macKey
+
+### Генерация сайдкара (для видео и аудио)
 
 - Размер чанка: 64KB
 - Перекрытие: 16 байт
-- HMAC SHA-256, обрезанный до 10 байт
+- HMAC SHA-256 для каждого чанка, обрезанный до 10 байт
 - Генерация "на лету" без дополнительных чтений из потока
 
-### Безопасность
-
-- Валидация всех входных данных
-- Проверка MAC для каждого чанка
-- Безопасная работа с криптографическими примитивами
-- Корректная обработка ошибок
-
-## Запуск тестов
+## Тестирование
 
 ```bash
 composer install
 vendor/bin/phpunit
 ```
 
-## Дальнейшее развитие
+## Безопасность
 
-Возможные улучшения:
-
-1. Поддержка асинхронной обработки для больших файлов
-2. Оптимизация памяти при работе с большими файлами
-3. Добавление поддержки других форматов сжатия
-4. Интеграция с PSR-3 для логирования
+- Валидация всех входных данных
+- Проверка MAC для каждого чанка
+- Безопасная работа с криптографическими примитивами
+- Корректная обработка ошибок
+- Проверка целостности данных
 
 ## Лицензия
 
