@@ -20,4 +20,5 @@ if __name__ == "__main__":
         print("Usage: python compare_sidecars.py <file1> <file2>")
     else:
         compare_sidecars(sys.argv[1], sys.argv[2])
+
 # python examples/compare_sidecars.py samples/VIDEO.sidecar samples/VIDEO.sidecar.mine

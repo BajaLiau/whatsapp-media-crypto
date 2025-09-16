@@ -81,6 +81,11 @@ class DecryptingStream implements StreamInterface
 
         // Decrypt ciphertext chunk by chunk
         $plain = '';
+        $flags = OPENSSL_RAW_DATA;
+        if (defined('OPENSSL_ZERO_PADDING')) {
+            $flags |= OPENSSL_ZERO_PADDING;
+        }
+
         while (strlen($ciphertext) >= 16) { // Minimum one AES block
             $chunkLen = min(self::CHUNK_SIZE + 16, strlen($ciphertext));
             $chunk = substr($ciphertext, 0, $chunkLen);
@@ -96,7 +101,7 @@ class DecryptingStream implements StreamInterface
                 $chunk,
                 'aes-256-cbc',
                 $this->cipherKey,
-                OPENSSL_RAW_DATA,
+                $flags,
                 $this->iv
             );
 
@@ -110,8 +115,10 @@ class DecryptingStream implements StreamInterface
             $this->iv = substr($chunk, -16);
         }
 
-        // Remove PKCS#7 padding with validation
-        $plain = $this->removePkcs7Padding($plain);
+        // Remove PKCS#7 padding with validation if this is the final chunk
+        if ($this->stream->eof()) {
+            $plain = $this->removePkcs7Padding($plain);
+        }
 
         $this->plainBuffer .= $plain;
 
