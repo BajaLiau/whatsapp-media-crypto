@@ -2,28 +2,59 @@
 require __DIR__ . '/../vendor/autoload.php';
 
 use GuzzleHttp\Psr7\Utils;
-use WhatsAppMedia\MediaKey;
-use WhatsAppMedia\Stream\DecryptingStream;
+use WhatsAppMedia\StreamFactory;
 
-// Load the encrypted file and key
-$encryptedFile = __DIR__ . '/../samples/original/VIDEO.encrypted';
-$keyFile = __DIR__ . '/../samples/original/VIDEO.key';
-$outputFile = __DIR__ . '/../samples/VIDEO.generated.mine';
+// Пути к файлам
+$encryptedVideoPath = __DIR__ . '/../samples/original/VIDEO.encrypted';
+$keyPath = __DIR__ . '/../samples/original/VIDEO.key';
+$outputDecryptedPath = __DIR__ . '/../samples/VIDEO.decrypted';
 
-$mediaKey = file_get_contents($keyFile);
-$parts = MediaKey::expand($mediaKey, 'VIDEO');
+try {
+    // Проверяем существование файлов
+    if (!file_exists($encryptedVideoPath)) {
+        throw new \RuntimeException("Зашифрованный файл не найден: $encryptedVideoPath");
+    }
+    if (!file_exists($keyPath)) {
+        throw new \RuntimeException("Файл ключа не найден: $keyPath");
+    }
 
-// Open the encrypted file for reading
-$encStream = Utils::streamFor(fopen($encryptedFile, 'rb'));
+    // Читаем ключ и создаем поток зашифрованного файла
+    $mediaKey = file_get_contents($keyPath);
+    $source = Utils::streamFor(fopen($encryptedVideoPath, 'rb'));
 
-// Create a decrypting stream
-$decStream = new DecryptingStream($encStream, $parts['cipherKey'], $parts['macKey'], $parts['iv']);
+    // Создаём дешифрующий поток
+    $decStream = StreamFactory::createDecryptingStream(
+        $source,
+        $mediaKey,
+        'VIDEO'
+    );
 
-// Write the decrypted content to the output file
-$out = fopen($outputFile, 'wb');
-while (!$decStream->eof()) {
-    fwrite($out, $decStream->read(8192));
+    // Создаем директорию для выходного файла, если её нет
+    $outputDir = dirname($outputDecryptedPath);
+    if (!is_dir($outputDir)) {
+        mkdir($outputDir, 0777, true);
+    }
+
+    // Записываем расшифрованные данные
+    $outputFile = fopen($outputDecryptedPath, 'wb');
+    try {
+        while (!$decStream->eof()) {
+            $data = $decStream->read(8192);
+            if ($data === '') {
+                break;
+            }
+            fwrite($outputFile, $data);
+        }
+    } finally {
+        fclose($outputFile);
+    }
+
+    echo "Видео успешно расшифровано: $outputDecryptedPath\n";
+
+} catch (\InvalidArgumentException $e) {
+    echo "Ошибка валидации: " . $e->getMessage() . "\n";
+    exit(1);
+} catch (\RuntimeException $e) {
+    echo "Ошибка расшифровки: " . $e->getMessage() . "\n";
+    exit(1);
 }
-fclose($out);
-
-echo "Decryption complete. Output written to VIDEO.generated.mine\n";

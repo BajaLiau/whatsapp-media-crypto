@@ -2,44 +2,50 @@
 require __DIR__ . '/../vendor/autoload.php';
 
 use GuzzleHttp\Psr7\Utils;
-use WhatsAppMedia\MediaKey;
-use WhatsAppMedia\Stream\EncryptingStreamWithSidecar;
+use WhatsAppMedia\StreamFactory;
 
-// Пути к оригинальному видео и mediaKey
+// Пути к файлам
 $originalVideoPath = __DIR__ . '/../samples/original/VIDEO.original';
 $keyPath = __DIR__ . '/../samples/original/VIDEO.key';
 $outputEncryptedPath = __DIR__ . '/../samples/VIDEO.encrypted';
-$sidecarPath = __DIR__ . '/../samples/VIDEO.sidecar.mine';
+$outputSidecarPath = __DIR__ . '/../samples/VIDEO.sidecar';
 
-// Загружаем mediaKey
+// Читаем ключ
 $mediaKey = file_get_contents($keyPath);
 
-// Расширяем ключ на части для шифрования
-$parts = MediaKey::expand($mediaKey, 'VIDEO');
-
-// Берём IV из MediaKey::expand() — это важно!
-$iv = $parts['iv'];
-
-// Открываем оригинальный видеофайл
+// Открываем исходный файл
 $source = Utils::streamFor(fopen($originalVideoPath, 'rb'));
 
-// Создаём шифрующий поток с sidecar
-$encStream = new EncryptingStreamWithSidecar(
-    $source,
-    $parts['cipherKey'],
-    $parts['macKey'],
-    $iv
-);
+try {
+    // Создаём шифрующий поток с генерацией сайдкара
+    $encStream = StreamFactory::createEncryptingStream(
+        $source,
+        $mediaKey,
+        'VIDEO',
+        true // включаем генерацию сайдкара
+    );
 
-// Записываем зашифрованное видео
-$outputFile = fopen($outputEncryptedPath, 'wb');
-while (!$encStream->eof()) {
-    fwrite($outputFile, $encStream->read(8192));
+    // Записываем зашифрованные данные
+    $outputFile = fopen($outputEncryptedPath, 'wb');
+    while (!$encStream->eof()) {
+        $data = $encStream->read(8192);
+        if ($data === '') {
+            break;
+        }
+        fwrite($outputFile, $data);
+    }
+    fclose($outputFile);
+
+    // Сохраняем сайдкар
+    file_put_contents($outputSidecarPath, $encStream->getSidecar());
+
+    echo "Видео успешно зашифровано: $outputEncryptedPath\n";
+    echo "Сайдкар сохранен: $outputSidecarPath\n";
+
+} catch (\InvalidArgumentException $e) {
+    echo "Ошибка валидации: " . $e->getMessage() . "\n";
+    exit(1);
+} catch (\RuntimeException $e) {
+    echo "Ошибка шифрования: " . $e->getMessage() . "\n";
+    exit(1);
 }
-fclose($outputFile);
-
-// Генерация sidecar
-file_put_contents($sidecarPath, $encStream->getSidecar());
-
-echo "Encrypted video saved to: $outputEncryptedPath\n";
-echo "Sidecar file saved to: $sidecarPath\n";

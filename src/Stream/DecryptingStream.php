@@ -1,173 +1,141 @@
 <?php
+declare(strict_types=1);
+
 namespace WhatsAppMedia\Stream;
 
 use Psr\Http\Message\StreamInterface;
-use GuzzleHttp\Psr7\StreamDecoratorTrait;
 
-class DecryptingStream implements StreamInterface
+/**
+ * Stream decorator that decrypts data using WhatsApp's media encryption protocol
+ */
+class DecryptingStream extends AbstractCryptoStream
 {
-    use StreamDecoratorTrait;
-
-    const CHUNK_SIZE = 65536; // read buffer size
-    const MAC_LEN = 10;       // application-specific MAC length
-
-    private $cipherKey;
-    private $macKey;
-    private $iv;
-    private $encBuffer = '';
-    private $plainBuffer = '';
-    private $finalized = false;
+    /** @var string Buffer for encrypted data */
+    private $encryptedBuffer = '';
+    
+    /** @var resource|null HMAC context for verification */
+    private $macCtx;
 
     public function __construct(StreamInterface $source, string $cipherKey, string $macKey, string $iv)
     {
-        $this->stream = $source;
-        $this->cipherKey = $cipherKey;
-        $this->macKey = $macKey;
-        $this->iv = $iv;
+        parent::__construct($source, $cipherKey, $macKey, $iv);
+        $this->macCtx = hash_init('sha256', HASH_HMAC, $this->macKey);
+        hash_update($this->macCtx, $this->iv);
     }
 
     /**
-     * Read all remaining encrypted data from underlying stream,
-     * verify MAC, decrypt and fill $this->plainBuffer.
-     *
-     * Note: simpler approach — reads all ciphertext into memory.
-     * If streaming is required, rewrite logic to decrypt in blocks.
+     * {@inheritdoc}
      */
-    private function produceMore()
+    public function read($length): string
+    {
+        $this->produceMore();
+        $data = substr($this->buffer, 0, $length);
+        $this->buffer = (string)substr($this->buffer, strlen($data));
+        return $data === false ? '' : $data;
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function eof(): bool
+    {
+        return $this->finalized && $this->buffer === '';
+    }
+
+    /**
+     * Process a chunk of encrypted data for decryption
+     *
+     * @param string $chunk Encrypted data chunk
+     * @return string Decrypted data
+     * @throws \RuntimeException If MAC verification fails or decryption fails
+     */
+    protected function processChunk(string $chunk): string
+    {
+        if (empty($chunk)) {
+            return '';
+        }
+
+        if ($this->stream->eof()) {
+            // Получаем MAC из последнего чанка
+            $mac = substr($chunk, -self::MAC_LEN);
+            $data = substr($chunk, 0, -self::MAC_LEN);
+
+            // Обновляем HMAC контекст данными
+            hash_update($this->macCtx, $data);
+
+            // Проверяем MAC
+            $calculatedMac = substr(hash_final($this->macCtx, true), 0, self::MAC_LEN);
+            if (!hash_equals($calculatedMac, $mac)) {
+                throw new \RuntimeException('MAC verification failed');
+            }
+
+            $decrypted = openssl_decrypt(
+                $data,
+                'AES-256-CBC',
+                $this->cipherKey,
+                OPENSSL_RAW_DATA | OPENSSL_ZERO_PADDING,
+                $this->iv
+            );
+
+            if ($decrypted === false) {
+                throw new \RuntimeException('Decryption failed');
+            }
+
+            $this->finalized = true;
+            return $this->pkcs7_unpad($decrypted);
+        }
+
+        // Обновляем HMAC контекст для не финального чанка
+        hash_update($this->macCtx, $chunk);
+
+        $decrypted = openssl_decrypt(
+            $chunk,
+            'AES-256-CBC',
+            $this->cipherKey,
+            OPENSSL_RAW_DATA | OPENSSL_ZERO_PADDING,
+            $this->iv
+        );
+
+        if ($decrypted === false) {
+            throw new \RuntimeException('Decryption failed');
+        }
+
+        return $decrypted;
+    }
+
+    /**
+     * Read and process more data from the source stream
+     */
+    private function produceMore(): void
     {
         if ($this->finalized) {
             return;
         }
 
-        // Read everything available from underlying stream
-        while (!$this->stream->eof()) {
-            $chunk = $this->stream->read(self::CHUNK_SIZE + self::MAC_LEN);
-            if ($chunk === false || $chunk === '') {
+        // Накапливаем зашифрованные данные
+        while (!$this->stream->eof() && strlen($this->encryptedBuffer) < self::CHUNK_SIZE) {
+            $chunk = $this->stream->read(self::CHUNK_SIZE);
+            if ($chunk === '') {
                 break;
             }
-
-            // Append to encrypted buffer
-            $this->encBuffer .= $chunk;
+            $this->encryptedBuffer .= $chunk;
         }
 
-        if ($this->encBuffer === '') {
-            // nothing to do
-            $this->finalized = true;
-            return;
-        }
+        // Обрабатываем полные чанки
+        if (strlen($this->encryptedBuffer) >= self::CHUNK_SIZE || $this->stream->eof()) {
+            $chunkToProcess = $this->stream->eof() ? $this->encryptedBuffer :
+                substr($this->encryptedBuffer, 0, self::CHUNK_SIZE);
 
-        // Need at least MAC_LEN bytes for MAC
-        if (strlen($this->encBuffer) < self::MAC_LEN + 16) { // Minimum one AES block + MAC
-            return; // Wait for more data
-        }
-
-        // Separate MAC (last MAC_LEN bytes) and ciphertext
-        $mac = substr($this->encBuffer, -self::MAC_LEN);
-        $ciphertext = substr($this->encBuffer, 0, -self::MAC_LEN);
-
-        // Verify MAC: HMAC-SHA256 truncated to MAC_LEN bytes, with IV included in HMAC context
-        $macCtx = hash_init('sha256', HASH_HMAC, $this->macKey);
-        hash_update($macCtx, $this->iv);
-        hash_update($macCtx, $ciphertext);
-        $expectedMac = substr(hash_final($macCtx, true), 0, self::MAC_LEN);
-
-        if (!hash_equals($expectedMac, $mac)) {
-            throw new \RuntimeException('MAC mismatch — integrity check failed');
-        }
-
-        // Decrypt ciphertext chunk by chunk
-        $plain = '';
-        $flags = OPENSSL_RAW_DATA;
-        if (defined('OPENSSL_ZERO_PADDING')) {
-            $flags |= OPENSSL_ZERO_PADDING;
-        }
-
-        while (strlen($ciphertext) >= 16) { // Minimum one AES block
-            $chunkLen = min(self::CHUNK_SIZE + 16, strlen($ciphertext));
-            $chunk = substr($ciphertext, 0, $chunkLen);
-            $ciphertext = substr($ciphertext, $chunkLen);
-
-            $decryptedChunk = openssl_decrypt(
-                $chunk,
-                'aes-256-cbc',
-                $this->cipherKey,
-                $flags,
-                $this->iv
-            );
-
-            if ($decryptedChunk === false) {
-                throw new \RuntimeException('Decryption failed for chunk with IV=' . bin2hex($this->iv));
+            $processed = $this->processChunk($chunkToProcess);
+            if (!empty($processed)) {
+                $this->buffer .= $processed;
             }
 
-            $plain .= $decryptedChunk;
-
-            // Update IV from the last 16 bytes of the encrypted chunk
-            $this->iv = substr($chunk, -16);
-        }
-
-        // Remove PKCS#7 padding with validation if this is the final chunk
-        if ($this->stream->eof()) {
-            $plain = $this->removePkcs7Padding($plain);
-        }
-
-        $this->plainBuffer .= $plain;
-
-        // Clear encrypted buffer and mark finalized
-        $this->encBuffer = '';
-        $this->finalized = true;
-    }
-
-    private function removePkcs7Padding(string $data): string
-    {
-        $len = strlen($data);
-        if ($len === 0) {
-            throw new \RuntimeException('Invalid padding: empty plaintext');
-        }
-
-        $pad = ord($data[$len - 1]);
-        if ($pad < 1 || $pad > 16) {
-
-            // Return the data as-is for debugging purposes
-            return $data;
-        }
-
-        if ($pad > $len) {
-            throw new \RuntimeException('Invalid padding length');
-        }
-
-        // Check that last $pad bytes are all equal to $pad
-        $paddingBytes = substr($data, -$pad);
-        if (strlen($paddingBytes) !== $pad) {
-            throw new \RuntimeException('Invalid padding (truncated)');
-        }
-
-        for ($i = 0; $i < $pad; $i++) {
-            if (ord($paddingBytes[$i]) !== $pad) {
-                throw new \RuntimeException('Invalid PKCS#7 padding');
+            if (!$this->stream->eof()) {
+                $this->encryptedBuffer = substr($this->encryptedBuffer, self::CHUNK_SIZE);
+            } else {
+                $this->encryptedBuffer = '';
             }
         }
-
-        return substr($data, 0, $len - $pad);
     }
-
-    public function read($length)
-    {
-        $this->produceMore();
-        if ($length <= 0) {
-            return '';
-        }
-
-        $out = substr($this->plainBuffer, 0, $length);
-        $this->plainBuffer = substr($this->plainBuffer, strlen($out));
-        return $out === false ? '' : $out;
-    }
-
-    public function eof()
-    {
-        $this->produceMore();
-        return $this->finalized && $this->plainBuffer === '';
-    }
-
-    // Для совместимости со StreamInterface: остальные методы можно делегировать к $this->stream
-    // (read, write, seek и т.д.) — StreamDecoratorTrait добавляет большинство из них.
 }

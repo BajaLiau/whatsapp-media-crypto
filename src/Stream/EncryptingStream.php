@@ -1,114 +1,159 @@
 <?php
+declare(strict_types=1);
+
 namespace WhatsAppMedia\Stream;
 
 use Psr\Http\Message\StreamInterface;
-use GuzzleHttp\Psr7\StreamDecoratorTrait;
 
-class EncryptingStream implements StreamInterface {
-    use StreamDecoratorTrait;
+class EncryptingStream extends AbstractCryptoStream
+{
+    private const SIDECAR_CHUNK_SIZE = 65536; // 64KB
+    private const SIDECAR_OVERLAP = 16;       // 16 bytes overlap
 
-    const CHUNK_SIZE = 65536;
-    private $cipherKey;
-    private $macKey;
-    private $currentIv;
-    private $encBuffer = '';
-    private $sidecar = '';
-    private $sidecarBuf = '';
+    /** @var resource HMAC context */
     private $macCtx;
-    private $finalized = false;
 
-    public function __construct(StreamInterface $source, $cipherKey, $macKey, $iv) {
-        $this->stream = $source;
-        $this->cipherKey = $cipherKey;
-        $this->macKey = $macKey;
-        $this->currentIv = $iv;
+    /** @var string Буфер для сайдкара */
+    private $sidecarBuffer = '';
+
+    /** @var string Сайдкар */
+    private $sidecar = '';
+
+    /** @var bool Генерировать ли сайдкар */
+    private $generateSidecar;
+
+    public function __construct(
+        StreamInterface $source,
+        string $cipherKey,
+        string $macKey,
+        string $iv,
+        bool $generateSidecar = false
+    ) {
+        parent::__construct($source, $cipherKey, $macKey, $iv);
+        $this->generateSidecar = $generateSidecar;
         $this->macCtx = hash_init('sha256', HASH_HMAC, $this->macKey);
-        hash_update($this->macCtx, $this->currentIv);
+        hash_update($this->macCtx, $this->iv);
     }
 
-    public function read($length) {
+    public function read($length): string
+    {
         $this->produceMore();
-        $out = substr($this->encBuffer, 0, $length);
-        $this->encBuffer = substr($this->encBuffer, strlen($out));
-        return $out === false ? '' : $out;
+        $data = substr($this->buffer, 0, $length);
+        $this->buffer = (string)substr($this->buffer, strlen($data));
+        return $data === false ? '' : $data;
     }
 
-    public function eof() {
-        $this->produceMore();
-        return $this->finalized && $this->encBuffer === '';
+    public function eof(): bool
+    {
+        return ($this->finalized || $this->stream->eof()) && $this->buffer === '';
     }
 
-    public function getSidecar() {
-        while (!$this->finalized) $this->produceMore();
+    /**
+     * Получить сгенерированный сайдкар
+     */
+    public function getSidecar(): string
+    {
+        if (!$this->generateSidecar) {
+            throw new \RuntimeException('Sidecar generation is not enabled');
+        }
+        // Дочитываем весь поток, чтобы сгенерировать полный сайдкар
+        while (!$this->eof()) {
+            $this->read(8192);
+        }
         return $this->sidecar;
     }
 
-    public function getMacCtx() {
-        return $this->macCtx;
+    protected function processChunk(string $chunk): string
+    {
+        if (empty($chunk)) {
+            return '';
+        }
+
+        $isFinal = $this->stream->eof();
+        $dataToEncrypt = $isFinal ? $this->pkcs7_pad($chunk) : $chunk;
+
+        $encrypted = openssl_encrypt(
+            $dataToEncrypt,
+            'AES-256-CBC',
+            $this->cipherKey,
+            OPENSSL_RAW_DATA | OPENSSL_ZERO_PADDING,
+            $this->iv
+        );
+
+        if ($encrypted === false) {
+            throw new \RuntimeException('Encryption failed');
+        }
+
+        hash_update($this->macCtx, $encrypted);
+
+        // Обработка сайдкара
+        if ($this->generateSidecar) {
+            $this->processSidecarChunk($encrypted);
+        }
+
+        if ($isFinal) {
+            $mac = substr(hash_final($this->macCtx, true), 0, self::MAC_LEN);
+            $this->finalized = true;
+            return $encrypted . $mac;
+        }
+
+        return $encrypted;
     }
 
-    private function pkcs7_pad(string $data, int $blockSize = 16): string {
-        $padLen = $blockSize - (strlen($data) % $blockSize);
-        if ($padLen === 0) $padLen = $blockSize;
-        return $data . str_repeat(chr($padLen), $padLen);
+    private function processSidecarChunk(string $encrypted): void
+    {
+        $this->sidecarBuffer .= $encrypted;
+
+        while (strlen($this->sidecarBuffer) >= self::SIDECAR_CHUNK_SIZE) {
+            // Берем чанк для сайдкара с перекрытием
+            $chunk = substr($this->sidecarBuffer, 0, self::SIDECAR_CHUNK_SIZE);
+            if (!$this->stream->eof()) {
+                $overlap = substr($this->sidecarBuffer, self::SIDECAR_CHUNK_SIZE, self::SIDECAR_OVERLAP);
+                if ($overlap !== false) {
+                    $chunk .= $overlap;
+                }
+            }
+
+            // Генерируем HMAC для чанка
+            $hmacCtx = hash_init('sha256', HASH_HMAC, $this->macKey);
+            hash_update($hmacCtx, $chunk);
+            $this->sidecar .= substr(hash_final($hmacCtx, true), 0, self::MAC_LEN);
+
+            // Сдвигаем буфер
+            $this->sidecarBuffer = substr($this->sidecarBuffer, self::SIDECAR_CHUNK_SIZE);
+        }
+
+        // Обрабатываем остаток при достижении конца файла
+        if ($this->stream->eof() && !empty($this->sidecarBuffer)) {
+            $hmacCtx = hash_init('sha256', HASH_HMAC, $this->macKey);
+            hash_update($hmacCtx, $this->sidecarBuffer);
+            $this->sidecar .= substr(hash_final($hmacCtx, true), 0, self::MAC_LEN);
+            $this->sidecarBuffer = '';
+        }
     }
 
-    private function produceMore() {
-        if ($this->finalized) return;
+    private function produceMore(): void
+    {
+        if ($this->finalized) {
+            return;
+        }
 
-        while ((strlen($this->encBuffer) < 1) && !$this->finalized) {
-            $chunk = $this->stream->read(self::CHUNK_SIZE);
-            $isFinal = $this->stream->eof();
+        if (strlen($this->buffer) >= self::CHUNK_SIZE) {
+            return;
+        }
 
-            // If read returned false/empty and EOF, treat as empty final chunk
-            if ($chunk === false) $chunk = '';
+        $chunk = $this->stream->read(self::CHUNK_SIZE);
 
-            // Choose flags: for intermediate chunks disable padding
-            $flags = OPENSSL_RAW_DATA;
-            $useZeroPadding = defined('OPENSSL_ZERO_PADDING');
-
-            if (!$isFinal) {
-                if ($useZeroPadding) {
-                    $flags |= OPENSSL_ZERO_PADDING;
-                }
-            } else {
-                $chunk = $this->pkcs7_pad($chunk, 16);
-
-                if ($useZeroPadding) {
-                    $flags |= OPENSSL_ZERO_PADDING;
-                }
-            }
-
-            $encrypted = openssl_encrypt($chunk, 'aes-256-cbc', $this->cipherKey, $flags, $this->currentIv);
-            if ($encrypted === false) {
-                throw new \RuntimeException('Encryption failed');
-            }
-
-            $this->currentIv = substr($encrypted, -16);
-
-            $this->encBuffer .= $encrypted;
-            hash_update($this->macCtx, $encrypted);
-            $this->sidecarBuf .= $encrypted;
-
-            while (strlen($this->sidecarBuf) >= self::CHUNK_SIZE + 16) {
-                $window = substr($this->sidecarBuf, 0, self::CHUNK_SIZE + 16);
-                $sig = hash_hmac('sha256', $window, $this->macKey, true);
-                $this->sidecar .= substr($sig, 0, 10);
-                $this->sidecarBuf = substr($this->sidecarBuf, self::CHUNK_SIZE);
-            }
-
-            if ($isFinal) {
-                $fullMac = hash_final($this->macCtx, true);
-                $this->encBuffer .= substr($fullMac, 0, 10);
-
-                if (strlen($this->sidecarBuf) > 0) {
-                    $sig = hash_hmac('sha256', $this->sidecarBuf, $this->macKey, true);
-                    $this->sidecar .= substr($sig, 0, 10);
-                }
-
+        if ($chunk === '') {
+            if ($this->stream->eof()) {
                 $this->finalized = true;
-                break;
             }
+            return;
+        }
+
+        $processed = $this->processChunk($chunk);
+        if (!empty($processed)) {
+            $this->buffer .= $processed;
         }
     }
 }
