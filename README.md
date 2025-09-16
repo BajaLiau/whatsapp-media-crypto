@@ -103,11 +103,13 @@ The `examples/` directory contains ready-to-use scripts:
 - `encrypt_audio_streaming.php` - audio encryption with sidecar generation
 - `encrypt_audio.php` - basic audio encryption
 - `encrypt_video.php` - basic video encryption
+- `encrypt_document.php` - document encryption
 
 ### Decryption
 - `decrypt_video.php` - video decryption
 - `decrypt_audio.php` - audio decryption
 - `decrypt_image.php` - image decryption
+- `decrypt_document.php` - document decryption
 
 All examples include:
 - File existence checks
