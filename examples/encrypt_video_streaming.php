@@ -11,7 +11,6 @@ $outputEncryptedPath = __DIR__ . '/../samples/VIDEO.encrypted';
 $outputSidecarPath = __DIR__ . '/../samples/VIDEO.sidecar';
 
 try {
-    // Check if source files exist
     if (!file_exists($originalVideoPath)) {
         throw new \RuntimeException("Source file not found: $originalVideoPath");
     }
@@ -19,55 +18,41 @@ try {
         throw new \RuntimeException("Key file not found: $keyPath");
     }
 
-    // Read the key
+    // Read media key
     $mediaKey = file_get_contents($keyPath);
 
-    // Open source file
+    // Open source stream
     $source = Utils::streamFor(fopen($originalVideoPath, 'rb'));
-
-    // Create output directory if it doesn't exist
-    $outputDir = dirname($outputEncryptedPath);
-    if (!is_dir($outputDir)) {
-        mkdir($outputDir, 0777, true);
-    }
 
     // Create encrypting stream with sidecar generation
     $encStream = StreamFactory::createEncryptingStream(
         $source,
         $mediaKey,
         'VIDEO',
-        true // enable sidecar generation
+        true
     );
 
-    // Write encrypted data
+    // Write encrypted data to file
     $outputFile = fopen($outputEncryptedPath, 'wb');
-    try {
-        while (!$encStream->eof()) {
-            $data = $encStream->read(8192);
-            if ($data === '') {
-                break;
-            }
-            fwrite($outputFile, $data);
+    while (!$encStream->eof()) {
+        $data = $encStream->read(8192);
+        if ($data === '') {
+            break;
         }
-    } finally {
-        fclose($outputFile);
+        fwrite($outputFile, $data);
     }
+    fclose($outputFile);
 
-    // Save the sidecar after complete encryption
+    // Save sidecar file
     file_put_contents($outputSidecarPath, $encStream->getSidecar());
 
     echo "Video successfully encrypted: $outputEncryptedPath\n";
     echo "Sidecar saved: $outputSidecarPath\n";
 
-    // Check file sizes
-    $originalSize = filesize($originalVideoPath);
-    $encryptedSize = filesize($outputEncryptedPath);
-    $sidecarSize = filesize($outputSidecarPath);
-
     echo "\nFile information:\n";
-    echo "Original file size: " . number_format($originalSize) . " bytes\n";
-    echo "Encrypted file size: " . number_format($encryptedSize) . " bytes\n";
-    echo "Sidecar size: " . number_format($sidecarSize) . " bytes\n";
+    echo "Original file size: " . number_format(filesize($originalVideoPath)) . " bytes\n";
+    echo "Encrypted file size: " . number_format(filesize($outputEncryptedPath)) . " bytes\n";
+    echo "Sidecar size: " . number_format(filesize($outputSidecarPath)) . " bytes\n";
 
 } catch (\InvalidArgumentException $e) {
     echo "Validation error: " . $e->getMessage() . "\n";

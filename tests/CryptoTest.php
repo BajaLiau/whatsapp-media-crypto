@@ -1,15 +1,18 @@
 <?php
+declare(strict_types=1);
+
+namespace WhatsAppMedia\Tests;
+
 use PHPUnit\Framework\TestCase;
 use GuzzleHttp\Psr7\Utils;
-use WhatsAppMedia\MediaKey;
-use WhatsAppMedia\StreamFactory;
+use WhatsAppMedia\StreamFactory; // Import StreamFactory
 
 class CryptoTest extends TestCase
 {
     private const SAMPLE_DIR = __DIR__ . '/../samples/original/';
 
     /**
-     * Testing basic encryption/decryption for all media types
+     * Test basic encryption/decryption for all media types
      *
      * @dataProvider mediaTypeProvider
      */
@@ -39,14 +42,15 @@ class CryptoTest extends TestCase
         }
 
         $this->assertNotEmpty($encrypted, "Encrypted data should not be empty for $mediaType");
-        $this->assertTrue(
-            hash('sha256', $originalData) === hash('sha256', $decrypted),
+        $this->assertEquals(
+            hash('sha256', $originalData),
+            hash('sha256', $decrypted),
             "Decrypted data should match original for $mediaType"
         );
     }
 
     /**
-     * Testing sidecar generation and validation for streamable media
+     * Test sidecar generation and validation for streamable media
      *
      * @dataProvider streamableMediaTypeProvider
      */
@@ -56,16 +60,9 @@ class CryptoTest extends TestCase
         $mediaKey = file_get_contents(self::SAMPLE_DIR . "$mediaType.key");
         $expectedSidecar = file_get_contents(self::SAMPLE_DIR . "$mediaType.sidecar");
 
-        // Encryption with sidecar generation
         $source = Utils::streamFor(fopen($original, 'rb'));
-        $encStream = StreamFactory::createEncryptingStream(
-            $source,
-            $mediaKey,
-            $mediaType,
-            true // enable sidecar generation
-        );
+        $encStream = StreamFactory::createEncryptingStream($source, $mediaKey, $mediaType, true);
 
-        // Read encrypted data to generate sidecar
         while (!$encStream->eof()) {
             $encStream->read(8192);
         }
@@ -80,9 +77,6 @@ class CryptoTest extends TestCase
         );
     }
 
-    /**
-     * Test invalid MAC handling
-     */
     public function testInvalidMac()
     {
         $this->expectException(\RuntimeException::class);
@@ -97,15 +91,11 @@ class CryptoTest extends TestCase
             'VIDEO'
         );
 
-        // Reading attempt should throw an exception
         while (!$decStream->eof()) {
             $decStream->read(8192);
         }
     }
 
-    /**
-     * Test sidecar generation attempt for unsupported type
-     */
     public function testSidecarForUnsupportedType()
     {
         $this->expectException(\InvalidArgumentException::class);
@@ -117,13 +107,10 @@ class CryptoTest extends TestCase
             $source,
             $mediaKey,
             'IMAGE',
-            true // attempt to enable sidecar generation for image
+            true
         );
     }
 
-    /**
-     * Test empty stream handling
-     */
     public function testEmptyStream()
     {
         $mediaKey = random_bytes(32);
@@ -138,18 +125,36 @@ class CryptoTest extends TestCase
         $this->assertNotEmpty($encrypted, 'Even empty stream should produce encrypted data (due to padding)');
     }
 
-    /**
-     * Test invalid key length
-     */
     public function testInvalidKeyLength()
     {
         $this->expectException(\InvalidArgumentException::class);
 
         $source = Utils::streamFor('test');
-        $invalidKey = random_bytes(16); // Invalid key length
+        $invalidKey = random_bytes(16);
 
         StreamFactory::createEncryptingStream($source, $invalidKey, 'VIDEO');
     }
+
+    public function testConsistentIvForSidecar()
+    {
+        $mediaType = 'VIDEO';
+        $original = self::SAMPLE_DIR . "$mediaType.original";
+        $mediaKey = file_get_contents(self::SAMPLE_DIR . "$mediaType.key");
+
+        $source = Utils::streamFor(fopen($original, 'rb'));
+        $encStream = StreamFactory::createEncryptingStream($source, $mediaKey, $mediaType, true);
+
+        // Read all data to generate sidecar
+        while (!$encStream->eof()) {
+            $encStream->read(8192);
+        }
+
+        $sidecar = $encStream->getSidecar();
+
+        $this->assertNotEmpty($sidecar, 'Sidecar should be generated');
+        $this->assertEquals(strlen($sidecar) % 10, 0, 'Sidecar should contain multiples of 10-byte HMACs');
+    }
+
 
     public function mediaTypeProvider(): array
     {

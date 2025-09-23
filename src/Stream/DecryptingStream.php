@@ -24,7 +24,16 @@ class DecryptingStream extends AbstractCryptoStream
     }
 
     /**
-     * {@inheritdoc}
+     * Read up to $length bytes from the decrypted stream.
+     *
+     * This method ensures that enough data is produced to satisfy the requested
+     * length, decrypting chunks as needed. If the buffer is empty and the source
+     * stream is at EOF, the method finalizes the decryption process and verifies
+     * the MAC.
+     *
+     * @param int $length Number of bytes to read.
+     * @return string Decrypted data.
+     * @throws \RuntimeException If MAC verification fails.
      */
     public function read($length): string
     {

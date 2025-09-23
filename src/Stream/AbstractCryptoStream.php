@@ -13,23 +13,26 @@ abstract class AbstractCryptoStream implements StreamInterface
 {
     use StreamDecoratorTrait;
 
-    protected const CHUNK_SIZE = 65536;
-    protected const MAC_LEN = 10;
+    protected const CHUNK_SIZE = 65536; // 64 KB
+    protected const MAC_LEN = 10; // Length of the MAC (Message Authentication Code)
 
-    /** @var string */
-    protected $cipherKey;
+    /** @var StreamInterface Source stream to be encrypted or decrypted */
+    protected StreamInterface $stream;
 
-    /** @var string */
-    protected $macKey;
+    /** @var string Key used for AES-CBC encryption or decryption */
+    protected string $cipherKey;
 
-    /** @var string */
-    protected $iv;
+    /** @var string Key used for HMAC (Hash-based Message Authentication Code) calculation */
+    protected string $macKey;
 
-    /** @var string */
-    protected $buffer = '';
+    /** @var string Initialization vector for AES-CBC */
+    protected string $iv;
 
-    /** @var bool */
-    protected $finalized = false;
+    /** @var string Buffer to store processed data temporarily */
+    protected string $buffer = '';
+
+    /** @var bool Indicates whether the stream has been finalized */
+    protected bool $finalized = false;
 
     /**
      * @param StreamInterface $source Source stream to encrypt/decrypt
@@ -53,15 +56,47 @@ abstract class AbstractCryptoStream implements StreamInterface
      * Process a chunk of data
      *
      * @param string $chunk Raw data chunk to process
-     * @return string Processed data
+     * @return string Processed (encrypted/decrypted) data
      */
     abstract protected function processChunk(string $chunk): string;
+
+    /**
+     * Read from the stream
+     *
+     * @param int $length Number of bytes to read
+     * @return string
+     */
+    abstract public function read(int $length): string;
+
+    /**
+     * Check if stream has reached EOF
+     */
+    public function eof(): bool
+    {
+        return ($this->finalized || $this->stream->eof()) && $this->buffer === '';
+    }
+
+    /**
+     * Get the initialization vector used for encryption/decryption
+     */
+    public function getIv(): string
+    {
+        return $this->iv;
+    }
+
+    /**
+     * Get the MAC key used for HMAC calculation
+     */
+    public function getMacKey(): string
+    {
+        return $this->macKey;
+    }
 
     /**
      * Add PKCS7 padding to the data
      *
      * @param string $data Data to pad
-     * @param int $blockSize Block size for padding
+     * @param int $blockSize Block size (default 16)
      * @return string Padded data
      */
     protected function pkcs7_pad(string $data, int $blockSize = 16): string
@@ -79,29 +114,20 @@ abstract class AbstractCryptoStream implements StreamInterface
      */
     protected function pkcs7_unpad(string $data): string
     {
+        if ($data === '') {
+            return '';
+        }
+
         $padLen = ord($data[strlen($data) - 1]);
         if ($padLen < 1 || $padLen > 16) {
             throw new \RuntimeException('Invalid PKCS7 padding');
         }
+
+        $padding = substr($data, -$padLen);
+        if ($padding !== str_repeat(chr($padLen), $padLen)) {
+            throw new \RuntimeException('Invalid PKCS7 padding');
+        }
+
         return substr($data, 0, -$padLen);
-    }
-
-    /**
-     * Read from the stream and fill buffer
-     *
-     * @param int $length Number of bytes to read
-     * @return string
-     */
-    public function read($length): string
-    {
-        throw new \BadMethodCallException('Must be implemented in subclass');
-    }
-
-    /**
-     * Check if stream has reached EOF
-     */
-    public function eof(): bool
-    {
-        return ($this->finalized || $this->stream->eof()) && $this->buffer === '';
     }
 }

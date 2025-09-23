@@ -5,22 +5,25 @@ namespace WhatsAppMedia\Stream;
 
 use Psr\Http\Message\StreamInterface;
 
+/**
+ * Stream that encrypts media and optionally generates a sidecar (HMAC per chunk)
+ */
 class EncryptingStream extends AbstractCryptoStream
 {
-    private const SIDECAR_CHUNK_SIZE = 65536; // 64KB
-    private const SIDECAR_OVERLAP = 16;       // 16 bytes overlap
+    private const SIDECAR_CHUNK_SIZE = 65536; // 64KB chunk for sidecar
+    private const SIDECAR_OVERLAP = 16;       // 16-byte overlap for HMAC
 
-    /** @var resource HMAC context */
+    /** @var resource HMAC context for the entire stream */
     private $macCtx;
 
-    /** @var string Buffer for sidecar */
-    private $sidecarBuffer = '';
+    /** @var string Buffer for sidecar chunks not yet processed */
+    private string $sidecarBuffer = '';
 
-    /** @var string Sidecar */
-    private $sidecar = '';
+    /** @var string Complete sidecar generated */
+    private string $sidecar = '';
 
-    /** @var bool Generate sidecar */
-    private $generateSidecar;
+    /** @var bool Whether to generate sidecar */
+    private bool $generateSidecar;
 
     public function __construct(
         StreamInterface $source,
@@ -31,10 +34,22 @@ class EncryptingStream extends AbstractCryptoStream
     ) {
         parent::__construct($source, $cipherKey, $macKey, $iv);
         $this->generateSidecar = $generateSidecar;
+
+        // Initialize HMAC context with IV
         $this->macCtx = hash_init('sha256', HASH_HMAC, $this->macKey);
         hash_update($this->macCtx, $this->iv);
     }
 
+    /**
+     * Read up to $length bytes from the encrypted stream.
+     *
+     * This method ensures that enough data is produced to satisfy the requested
+     * length, encrypting chunks as needed. If the buffer is empty and the source
+     * stream is at EOF, the method finalizes the encryption process.
+     *
+     * @param int $length Number of bytes to read.
+     * @return string Encrypted data.
+     */
     public function read($length): string
     {
         $this->produceMore();
@@ -43,34 +58,41 @@ class EncryptingStream extends AbstractCryptoStream
         return $data === false ? '' : $data;
     }
 
+    /**
+     * Check end of stream
+     */
     public function eof(): bool
     {
         return ($this->finalized || $this->stream->eof()) && $this->buffer === '';
     }
 
     /**
-     * Get the generated sidecar
+     * Return the sidecar after reading the full stream
      */
     public function getSidecar(): string
     {
         if (!$this->generateSidecar) {
             throw new \RuntimeException('Sidecar generation is not enabled');
         }
-        // Read the entire stream to generate complete sidecar
+
+        // Ensure the entire stream is processed
         while (!$this->eof()) {
             $this->read(8192);
         }
+
         return $this->sidecar;
     }
 
+    /**
+     * Encrypt a single chunk and optionally generate sidecar
+     */
     protected function processChunk(string $chunk): string
     {
-
         $isFinal = $this->stream->eof();
         $dataToEncrypt = $isFinal ? $this->pkcs7_pad($chunk) : $chunk;
 
-        if (empty($dataToEncrypt)) {
-            return ''; // Return empty only if no data and not final
+        if ($dataToEncrypt === '') {
+            return '';
         }
 
         $encrypted = openssl_encrypt(
@@ -87,7 +109,6 @@ class EncryptingStream extends AbstractCryptoStream
 
         hash_update($this->macCtx, $encrypted);
 
-        // Process sidecar
         if ($this->generateSidecar) {
             $this->processSidecarChunk($encrypted);
         }
@@ -101,13 +122,16 @@ class EncryptingStream extends AbstractCryptoStream
         return $encrypted;
     }
 
+    /**
+     * Process chunks for sidecar generation
+     */
     private function processSidecarChunk(string $encrypted): void
     {
         $this->sidecarBuffer .= $encrypted;
 
         while (strlen($this->sidecarBuffer) >= self::SIDECAR_CHUNK_SIZE) {
-            // Get chunk for sidecar with overlap
             $chunk = substr($this->sidecarBuffer, 0, self::SIDECAR_CHUNK_SIZE);
+
             if (!$this->stream->eof()) {
                 $overlap = substr($this->sidecarBuffer, self::SIDECAR_CHUNK_SIZE, self::SIDECAR_OVERLAP);
                 if ($overlap !== false) {
@@ -115,17 +139,16 @@ class EncryptingStream extends AbstractCryptoStream
                 }
             }
 
-            // Generate HMAC for chunk
+            // HMAC for this sidecar chunk
             $hmacCtx = hash_init('sha256', HASH_HMAC, $this->macKey);
             hash_update($hmacCtx, $chunk);
             $this->sidecar .= substr(hash_final($hmacCtx, true), 0, self::MAC_LEN);
 
-            // Move buffer
             $this->sidecarBuffer = substr($this->sidecarBuffer, self::SIDECAR_CHUNK_SIZE);
         }
 
-        // Process remaining data at end of file
-        if ($this->stream->eof() && !empty($this->sidecarBuffer)) {
+        // Handle remaining data at EOF
+        if ($this->stream->eof() && $this->sidecarBuffer !== '') {
             $hmacCtx = hash_init('sha256', HASH_HMAC, $this->macKey);
             hash_update($hmacCtx, $this->sidecarBuffer);
             $this->sidecar .= substr(hash_final($hmacCtx, true), 0, self::MAC_LEN);
@@ -133,29 +156,28 @@ class EncryptingStream extends AbstractCryptoStream
         }
     }
 
+    /**
+     * Fill buffer with processed chunks
+     */
     private function produceMore(): void
     {
-        if ($this->finalized) {
-            return;
-        }
-
-        if (strlen($this->buffer) >= self::CHUNK_SIZE) {
+        if ($this->finalized || strlen($this->buffer) >= self::CHUNK_SIZE) {
             return;
         }
 
         $chunk = $this->stream->read(self::CHUNK_SIZE);
 
         if ($chunk === '' && $this->stream->eof()) {
-            // Apply padding for empty streams at the end
+            // Pad empty stream
             $processed = $this->processChunk('');
-            if (!empty($processed)) {
+            if ($processed !== '') {
                 $this->buffer .= $processed;
             }
             return;
         }
 
         $processed = $this->processChunk($chunk);
-        if (!empty($processed)) {
+        if ($processed !== '') {
             $this->buffer .= $processed;
         }
     }

@@ -79,15 +79,25 @@ class StreamFactory
         );
     }
 
+    /**
+     * Validates the media type.
+     *
+     * @param string $mediaType
+     * @throws \InvalidArgumentException If the media type is invalid.
+     */
     private static function validateMediaType(string $mediaType): void
     {
         if (!in_array($mediaType, self::SUPPORTED_TYPES, true)) {
-            throw new \InvalidArgumentException(
-                sprintf('Invalid media type. Supported types are: %s', implode(', ', self::SUPPORTED_TYPES))
-            );
+            throw new \InvalidArgumentException('Unsupported media type: ' . $mediaType);
         }
     }
 
+    /**
+     * Validates the media key length.
+     *
+     * @param string $mediaKey
+     * @throws \InvalidArgumentException If the media key length is invalid.
+     */
     private static function validateMediaKey(string $mediaKey): void
     {
         if (strlen($mediaKey) !== 32) {
